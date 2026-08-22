@@ -20,7 +20,7 @@ import time
 START = 2037
 
 
-def solve(case, deadline_s=2.0):
+def solve(case, deadline_s=0.5):
     tl = {int(y): s for y, s in case["timeline"].items()}
     deep = min((y for y in tl if 2 * (START - y) <= case["energy"]), default=START)
     ys = [y for y in tl if deep <= y <= START]
@@ -335,44 +335,50 @@ def _knapsack(items, cap):
     _KNAP_MAX the exact DP would be too big, so use greedy-by-ratio instead."""
     if not items:
         return []
-    budget = min(cap, sum(it[0] * it[-1] for it in items))
-    if budget <= 0:
-        return []
-    if budget > _KNAP_MAX:
-        return _greedy_ratio(items, cap)
+    # every item here is profitable (value>0); if we can afford them all, do so.
+    total_cost = sum(it[0] * it[-1] for it in items)
+    if cap >= total_cost:
+        return [(it, it[-1]) for it in items]
+    budget = cap
+    # scale the budget into <= _KNAP_MAX buckets so a huge capital can't blow up
+    # the DP. costs round up (never overspend); near-exact, and exact when scale=1.
+    scale = 1
+    while budget // scale > _KNAP_MAX:
+        scale *= 2
+    B = budget // scale
     pieces = []  # binary-decompose bounded counts into 0/1 chunks
     for idx, it in enumerate(items):
-        cost, val, mq = it[0], it[1], it[-1]
+        cost, val, mq = -(-it[0] // scale), it[1], it[-1]  # ceil-divide cost
+        cost = max(cost, 1)
         k = 1
         while mq > 0:
             take = min(k, mq)
             pieces.append((cost * take, val * take, idx, take))
             mq -= take
             k *= 2
-    dp = [0] * (budget + 1)
-    par = [None] * (budget + 1)  # parent pointer: (prev_c, item_index, k) to reach c
+    dp = [0] * (B + 1)
+    par = [None] * (B + 1)  # parent pointer: (prev_c, item_index, k) to reach c
     for cost, val, idx, k in pieces:
-        for c in range(budget, cost - 1, -1):
+        if cost > B:
+            continue
+        for c in range(B, cost - 1, -1):
             if dp[c - cost] + val > dp[c]:
                 dp[c] = dp[c - cost] + val
                 par[c] = (c - cost, idx, k)
-    best = max(range(budget + 1), key=lambda c: dp[c])
+    best = max(range(B + 1), key=lambda c: dp[c])
     qty = {}
     c = best
     while par[c] is not None:  # O(pieces) backtrack, no per-cell list copies
         prev, idx, k = par[c]
         qty[idx] = qty.get(idx, 0) + k
         c = prev
-    return [(items[idx], q) for idx, q in qty.items()]
-
-
-def _greedy_ratio(items, cap):
-    """Fallback for huge budgets: buy highest value/cost first, to qty then
-    capital. Not exact but close, and O(n log n)."""
-    out = []
-    for it in sorted(items, key=lambda it: -it[1] / it[0]):
-        q = min(it[-1], cap // it[0])
-        if q:
-            cap -= it[0] * q
-            out.append((it, q))
-    return out
+    # scaling rounds costs up, so the plan may nominally overspend; trim greedily
+    # by real cost to fit actual capital while keeping the highest-value items.
+    picked = sorted(qty.items(), key=lambda kv: items[kv[0]][1] / items[kv[0]][0])
+    spent = sum(items[i][0] * q for i, q in qty.items())
+    for i, q in picked:
+        while q > 0 and spent > cap:
+            spent -= items[i][0]
+            q -= 1
+            qty[i] -= 1
+    return [(items[idx], q) for idx, q in qty.items() if q > 0]
