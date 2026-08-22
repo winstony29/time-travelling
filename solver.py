@@ -370,40 +370,47 @@ def _knapsack(items, cap):
 
 
 def _knap_by_cost(pieces, B):
+    # dp over spend; track per-piece take-flags so reconstruction uses each 0/1
+    # piece at most once (a shared parent chain would double-count a piece).
     dp = [0] * (B + 1)
-    par = [None] * (B + 1)  # (prev_c, item_index, k)
+    took = []  # took[p][c] = 1 if piece p was taken to improve dp[c]
     for cost, val, idx, k in pieces:
-        if cost > B:
-            continue
+        flags = bytearray(B + 1)
         for c in range(B, cost - 1, -1):
             if dp[c - cost] + val > dp[c]:
                 dp[c] = dp[c - cost] + val
-                par[c] = (c - cost, idx, k)
+                flags[c] = 1
+        took.append(flags)
     c = max(range(B + 1), key=lambda c: dp[c])
-    qty = {}
-    while par[c] is not None:
-        prev, idx, k = par[c]
-        qty[idx] = qty.get(idx, 0) + k
-        c = prev
-    return qty
+    return _reconstruct(pieces, took, c, axis=0)  # step by piece cost
 
 
 def _knap_by_value(pieces, items, cap, V):
     INF = float("inf")
     dp = [INF] * (V + 1)  # dp[v] = min cost to attain exactly value v
     dp[0] = 0
-    par = [None] * (V + 1)  # (prev_v, item_index, k)
+    took = []
     for cost, val, idx, k in pieces:
+        flags = bytearray(V + 1)
         for v in range(V, val - 1, -1):
             if dp[v - val] + cost < dp[v]:
                 dp[v] = dp[v - val] + cost
-                par[v] = (v - val, idx, k)
+                flags[v] = 1
+        took.append(flags)
     v = max(vv for vv in range(V + 1) if dp[vv] <= cap)  # richest affordable
+    return _reconstruct(pieces, took, v, axis=1)  # step by piece value
+
+
+def _reconstruct(pieces, took, cell, axis):
+    """Walk pieces in reverse; each piece is taken at most once, so summed qty
+    can never exceed an item's bound. `axis` selects the DP dimension the piece
+    moves along: 0 = cost (cost-indexed dp), 1 = value (value-indexed dp)."""
     qty = {}
-    while par[v] is not None:
-        prev, idx, k = par[v]
-        qty[idx] = qty.get(idx, 0) + k
-        v = prev
+    for p in range(len(pieces) - 1, -1, -1):
+        if took[p][cell]:
+            _cost, _val, idx, k = pieces[p]
+            qty[idx] = qty.get(idx, 0) + k
+            cell -= pieces[p][axis]
     return qty
 
 
