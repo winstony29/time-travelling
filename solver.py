@@ -316,16 +316,23 @@ def _profit(tl, actions, cap):
     return cap - start if year == START else -1
 
 
+# ponytail: caps the knapsack DP width so a huge capital*qty can't OOM/timeout
+# the worker. Above this, fall back to greedy-by-ratio (near-optimal for money).
+_KNAP_MAX = 200_000
+
+
 def _knapsack(items, cap):
     """Bounded knapsack: maximize value under budget `cap`. Each item is a tuple
     whose [0] is unit cost, [1] is unit value, [-1] is max qty. Returns
-    [(item, qty)]. Budget is clamped to the max spendable so the DP width stays
-    bounded even when capital dwarfs what's for sale."""
+    [(item, qty)]. Budget is clamped to the max spendable; if that still exceeds
+    _KNAP_MAX the exact DP would be too big, so use greedy-by-ratio instead."""
     if not items:
         return []
     budget = min(cap, sum(it[0] * it[-1] for it in items))
     if budget <= 0:
         return []
+    if budget > _KNAP_MAX:
+        return _greedy_ratio(items, cap)
     pieces = []  # binary-decompose bounded counts into 0/1 chunks
     for idx, it in enumerate(items):
         cost, val, mq = it[0], it[1], it[-1]
@@ -336,14 +343,29 @@ def _knapsack(items, cap):
             mq -= take
             k *= 2
     dp = [0] * (budget + 1)
-    pick = [[] for _ in range(budget + 1)]  # (item_index, k) list to reach spend c
+    par = [None] * (budget + 1)  # parent pointer: (prev_c, item_index, k) to reach c
     for cost, val, idx, k in pieces:
         for c in range(budget, cost - 1, -1):
             if dp[c - cost] + val > dp[c]:
                 dp[c] = dp[c - cost] + val
-                pick[c] = pick[c - cost] + [(idx, k)]
+                par[c] = (c - cost, idx, k)
     best = max(range(budget + 1), key=lambda c: dp[c])
     qty = {}
-    for idx, k in pick[best]:
+    c = best
+    while par[c] is not None:  # O(pieces) backtrack, no per-cell list copies
+        prev, idx, k = par[c]
         qty[idx] = qty.get(idx, 0) + k
+        c = prev
     return [(items[idx], q) for idx, q in qty.items()]
+
+
+def _greedy_ratio(items, cap):
+    """Fallback for huge budgets: buy highest value/cost first, to qty then
+    capital. Not exact but close, and O(n log n)."""
+    out = []
+    for it in sorted(items, key=lambda it: -it[1] / it[0]):
+        q = min(it[-1], cap // it[0])
+        if q:
+            cap -= it[0] * q
+            out.append((it, q))
+    return out
