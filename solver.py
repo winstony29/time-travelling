@@ -15,15 +15,18 @@ Two strategies compete and the more profitable (by simulation) wins:
 
 Neither dominates, so we run both and return the higher-profit action list.
 """
+import time
+
 START = 2037
 
 
-def solve(case):
+def solve(case, deadline_s=2.0):
     tl = {int(y): s for y, s in case["timeline"].items()}
     deep = min((y for y in tl if 2 * (START - y) <= case["energy"]), default=START)
     ys = [y for y in tl if deep <= y <= START]
     seq = sorted(ys, reverse=True) + sorted(ys)[1:]  # down pass then up pass
     cap = case["capital"]
+    deadline = time.monotonic() + deadline_s  # hard wall so a worker never hangs
 
     # heuristics give a strong starting bound; the exact search then only has to
     # beat it, which makes branch-and-bound prune aggressively.
@@ -35,15 +38,16 @@ def solve(case):
         if p > best_profit:
             best, best_profit = acts, p
 
-    exact = _exact(tl, seq, cap, best_profit)
-    if exact is not None:
-        ep = _profit(tl, exact, cap)
-        if ep > best_profit:
-            best = exact
+    if time.monotonic() < deadline:  # only try exact if there's time budget left
+        exact = _exact(tl, seq, cap, best_profit, deadline=deadline)
+        if exact is not None:
+            ep = _profit(tl, exact, cap)
+            if ep > best_profit:
+                best = exact
     return best
 
 
-def _exact(tl, seq, cap0, seed_profit, node_budget=400_000):
+def _exact(tl, seq, cap0, seed_profit, node_budget=400_000, deadline=None):
     """Branch-and-bound for the true optimum. Branch at each stop over which
     stocks to buy (each all-in up to capital/qty) and which held lots to sell;
     prune with an admissible bound (best remaining sell/buy ratio applied to all
@@ -85,7 +89,8 @@ def _exact(tl, seq, cap0, seed_profit, node_budget=400_000):
 
     def dfs(i, cap, held, inv, path):
         nodes[0] += 1
-        if nodes[0] > node_budget:
+        if nodes[0] > node_budget or (
+                deadline and nodes[0] % 2048 == 0 and time.monotonic() > deadline):
             raise _Budget
         # realize any holdings whose scheduled sell stop is now (kept minimal:
         # held maps stock -> (qty, sell_stop); we settle when we pass sell_stop)
@@ -318,7 +323,9 @@ def _profit(tl, actions, cap):
 
 # ponytail: caps the knapsack DP width so a huge capital*qty can't OOM/timeout
 # the worker. Above this, fall back to greedy-by-ratio (near-optimal for money).
-_KNAP_MAX = 200_000
+# Kept small on purpose: the DP runs many times per request (4 strategies x
+# stops x cases), so an exact-but-wide DP is what killed the worker at 200k.
+_KNAP_MAX = 20_000
 
 
 def _knapsack(items, cap):

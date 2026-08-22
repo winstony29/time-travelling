@@ -14,7 +14,14 @@ def health():
 @app.post("/stonks")
 def stonks():
     cases = request.get_json(force=True)
-    return jsonify([solve(c) for c in cases])
+    # never let one hard/broken case 500 the whole batch: worst case is []
+    out = []
+    for c in cases:
+        try:
+            out.append(solve(c))
+        except Exception:
+            out.append([])
+    return jsonify(out)
 
 
 if __name__ == "__main__":
