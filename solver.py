@@ -321,23 +321,25 @@ def _profit(tl, actions, cap):
     return cap - start if year == START else -1
 
 
-# ponytail: caps the knapsack DP width so a huge capital*qty can't OOM/timeout
-# the worker. Above this, fall back to greedy-by-ratio (near-optimal for money).
-# Kept small on purpose: the DP runs many times per request (4 strategies x
-# stops x cases), so an exact-but-wide DP is what killed the worker at 200k.
-_KNAP_MAX = 20_000
+# ponytail: caps the knapsack DP width. The DP runs many times per request
+# (4 strategies x stops x cases), so it must be cheap even in the worst case --
+# a wide exact DP is what kept timing out the worker. 2000 buckets is plenty
+# resolution for allocating money and finishes in microseconds.
+_KNAP_MAX = 2_000
 
 
 def _knapsack(items, cap):
     """Bounded knapsack: maximize value under budget `cap`. Each item is a tuple
     whose [0] is unit cost, [1] is unit value, [-1] is max qty. Returns
-    [(item, qty)]. Budget is clamped to the max spendable; if that still exceeds
-    _KNAP_MAX the exact DP would be too big, so use greedy-by-ratio instead."""
+    [(item, qty)]. DP width is capped at _KNAP_MAX via bucketing so a large
+    capital can never blow up the runtime."""
     if not items:
         return []
     # every item here is profitable (value>0); if we can afford them all, do so.
-    if cap >= sum(it[0] * it[-1] for it in items):
+    total_cost = sum(it[0] * it[-1] for it in items)
+    if cap >= total_cost:
         return [(it, it[-1]) for it in items]
+    cap = min(cap, total_cost)  # never DP wider than what's actually spendable
 
     if cap <= _KNAP_MAX:  # exact DP over real dollars (small/normal capital)
         return _knap_dp(items, cap, scale=1)
