@@ -336,28 +336,46 @@ def _knapsack(items, cap):
     if not items:
         return []
     # every item here is profitable (value>0); if we can afford them all, do so.
-    total_cost = sum(it[0] * it[-1] for it in items)
-    if cap >= total_cost:
+    if cap >= sum(it[0] * it[-1] for it in items):
         return [(it, it[-1]) for it in items]
-    budget = cap
-    # scale the budget into <= _KNAP_MAX buckets so a huge capital can't blow up
-    # the DP. costs round up (never overspend); near-exact, and exact when scale=1.
+
+    if cap <= _KNAP_MAX:  # exact DP over real dollars (small/normal capital)
+        return _knap_dp(items, cap, scale=1)
+
+    # huge capital: bucket dollars so the DP width stays bounded, then repair to
+    # real capital. Approximate but only ever used when the exact DP won't fit.
     scale = 1
-    while budget // scale > _KNAP_MAX:
+    while cap // scale > _KNAP_MAX:
         scale *= 2
-    B = budget // scale
+    approx = _knap_dp(items, cap, scale)
+    qty = {id(it): [it, q] for it, q in approx}
+    spent = sum(it[0] * q for it, q in approx)
+    # scaling rounds costs up, so we may have underspent -- top up cheapest-first
+    for it in sorted(items, key=lambda it: it[0]):
+        cur = qty.get(id(it), [it, 0])
+        room = min(it[-1] - cur[1], (cap - spent) // it[0])
+        if room > 0:
+            cur[1] += room
+            spent += it[0] * room
+            qty[id(it)] = cur
+    return [(v[0], v[1]) for v in qty.values() if v[1] > 0]
+
+
+def _knap_dp(items, cap, scale):
+    """Exact bounded-knapsack DP over budget cap//scale, costs ceil-divided by
+    scale. scale=1 is exact in real dollars."""
+    B = cap // scale
     pieces = []  # binary-decompose bounded counts into 0/1 chunks
     for idx, it in enumerate(items):
-        cost, val, mq = -(-it[0] // scale), it[1], it[-1]  # ceil-divide cost
-        cost = max(cost, 1)
-        k = 1
+        cost = max(-(-it[0] // scale), 1)  # ceil-divide, never 0
+        mq, k = it[-1], 1
         while mq > 0:
             take = min(k, mq)
-            pieces.append((cost * take, val * take, idx, take))
+            pieces.append((cost * take, it[1] * take, idx, take))
             mq -= take
             k *= 2
     dp = [0] * (B + 1)
-    par = [None] * (B + 1)  # parent pointer: (prev_c, item_index, k) to reach c
+    par = [None] * (B + 1)  # (prev_c, item_index, k) to reach spend c
     for cost, val, idx, k in pieces:
         if cost > B:
             continue
@@ -365,20 +383,10 @@ def _knapsack(items, cap):
             if dp[c - cost] + val > dp[c]:
                 dp[c] = dp[c - cost] + val
                 par[c] = (c - cost, idx, k)
-    best = max(range(B + 1), key=lambda c: dp[c])
+    c = max(range(B + 1), key=lambda c: dp[c])
     qty = {}
-    c = best
-    while par[c] is not None:  # O(pieces) backtrack, no per-cell list copies
+    while par[c] is not None:
         prev, idx, k = par[c]
         qty[idx] = qty.get(idx, 0) + k
         c = prev
-    # scaling rounds costs up, so the plan may nominally overspend; trim greedily
-    # by real cost to fit actual capital while keeping the highest-value items.
-    picked = sorted(qty.items(), key=lambda kv: items[kv[0]][1] / items[kv[0]][0])
-    spent = sum(items[i][0] * q for i, q in qty.items())
-    for i, q in picked:
-        while q > 0 and spent > cap:
-            spent -= items[i][0]
-            q -= 1
-            qty[i] -= 1
-    return [(items[idx], q) for idx, q in qty.items() if q > 0]
+    return [(items[idx], q) for idx, q in qty.items()]
